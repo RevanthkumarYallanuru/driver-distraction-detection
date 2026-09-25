@@ -29,6 +29,11 @@ def test_face_landmarker_finds_face_and_computes_ear():
     # Head pose flips with the image.
     assert result.head_direction == "LEFT"
     assert mirrored.face_detected and mirrored.head_direction == "RIGHT"
+    # Head angles agree with V1's label (yaw > 0 = driver's left) and flip when mirrored.
+    assert result.yaw > 5 and mirrored.yaw < -5
+    assert abs(result.yaw + mirrored.yaw) < 3
+    assert -30 < result.pitch < 30
+    assert result.gaze_direction != "UNKNOWN" and len(result.iris_points) == 2
 
 
 def test_no_face_in_empty_frame():
@@ -48,8 +53,9 @@ def test_yolo_runs_and_filters_to_phones():
     from services.detection.phone_detector import PhoneDetector
 
     detector = PhoneDetector(settings.yolo_model_path, 0.5)
-    boxes = detector.detect(cv2.imread(str(ASSETS / "bus.jpg")))
+    boxes, score = detector.detect_with_score(cv2.imread(str(ASSETS / "bus.jpg")))
     assert boxes == []   # a bus scene has no phones
+    assert 0.0 <= score < 0.5
 
 
 def test_missing_model_raises_cleanly(tmp_path):

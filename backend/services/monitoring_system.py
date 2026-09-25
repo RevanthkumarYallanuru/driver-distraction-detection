@@ -21,6 +21,8 @@ from config import Settings
 from services.ai_engine import AIEngine, DetectionSnapshot
 from services.alert_manager import AlertManager, build_definitions
 from services.camera_service import CameraService
+from services.data_logger import DataLogger
+from services.driver_state import DriverState, DriverStateAnalyzer
 from services.telemetry_service import TelemetryService
 from services.vehicle_simulator import VehicleSimulator
 from services.voice_service import VoiceService
@@ -42,6 +44,31 @@ CONDITION_LABELS = {
     "PHONE": "phone usage",
     "LOOKING_AWAY": "looking away",
 }
+
+# Level shown in the "Recent Alerts" list (drowsiness is the most dangerous single condition).
+ALERT_LOG_LEVEL = {
+    "CRITICAL": "CRITICAL",
+    "DROWSINESS": "CRITICAL",
+    "PHONE": "WARNING",
+    "LOOKING_AWAY": "WARNING",
+    "ATTENTION_RESTORED": "INFO",
+}
+
+
+def alert_log_message(alert_type: str, snap: DetectionSnapshot) -> str:
+    """Human-readable alert line with the measurement that triggered it."""
+    if alert_type == "DROWSINESS":
+        return f"Drowsiness detected (EAR: {snap.ear:.2f})" if snap.ear is not None else "Drowsiness detected"
+    if alert_type == "PHONE":
+        return f"Phone detected (Confidence: {snap.phone_score:.2f})"
+    if alert_type == "LOOKING_AWAY":
+        side = snap.head_direction.lower() if snap.head_direction in ("LEFT", "RIGHT") else "away"
+        seconds = max(1, round(snap.elapsed.get("LOOKING_AWAY", 0.0)))
+        return f"Looking {side} for {seconds} second{'s' if seconds != 1 else ''}"
+    if alert_type == "CRITICAL":
+        labels = ", ".join(CONDITION_LABELS[c] for c in snap.active_conditions)
+        return f"Multiple distractions ({labels})"
+    return "Normal driving state"
 
 
 class MonitoringSystem:
@@ -73,7 +100,10 @@ class MonitoringSystem:
             acceleration=settings.acceleration,
             horn_duration=settings.horn_duration,
         )
-        self.telemetry = TelemetryService()
+        self.data_logger = DataLogger(settings.logs_dir, enabled=settings.data_logging)
+        self.telemetry = TelemetryService(on_record=self._record)
+        self.driver_state = DriverStateAnalyzer(settings.ear_threshold)
+        self._state: Optional[DriverState] = None
 
         self._task: Optional[asyncio.Task] = None
         self._was_distracted = False
@@ -85,7 +115,14 @@ class MonitoringSystem:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _record(self, kind: str, entry: dict) -> None:
+        if kind == "alert":
+            self.data_logger.log_alert(entry)
+        else:
+            self.data_logger.log_event(entry)
+
     async def start(self) -> None:
+        self.data_logger.start()
         self.camera.start()
         self.engine.start()
         self.voice.start()
@@ -103,6 +140,7 @@ class MonitoringSystem:
         await asyncio.to_thread(self.engine.stop)
         await asyncio.to_thread(self.camera.stop)
         await asyncio.to_thread(self.voice.stop)
+        self.data_logger.stop()
 
     # ------------------------------------------------------------------
     # Commands
@@ -160,6 +198,13 @@ class MonitoringSystem:
                 await self.telemetry.broadcast(
                     {"type": "announcement", "announcement": announcement.to_dict()}
                 )
+                await self.telemetry.broadcast(
+                    self.telemetry.make_alert(
+                        announcement.type,
+                        alert_log_message(announcement.type, snap),
+                        ALERT_LOG_LEVEL.get(announcement.type, "WARNING"),
+                    )
+                )
                 if announcement.type != "ATTENTION_RESTORED":
                     await self._emit("DRIVER ALERT", announcement.message, announcement.level)
                 if announcement.type in ("CRITICAL", "DROWSINESS"):
@@ -169,7 +214,16 @@ class MonitoringSystem:
             level = "WARNING" if event.type in ("VEHICLE SLOWING", "SPEED REDUCED") else "INFO"
             await self._emit(event.type, event.message, level)
 
-        await self.telemetry.broadcast(self._build_telemetry(snap, ai_active))
+        if ai_active:
+            current = self.alerts.current
+            self._state = self.driver_state.update(snap, dt, current.type if current else None)
+        else:
+            self.driver_state.reset()
+            self._state = None
+
+        telemetry = self._build_telemetry(snap, ai_active)
+        self.data_logger.log_telemetry(telemetry)
+        await self.telemetry.broadcast(telemetry)
 
     async def _track_system_state(self, snap: DetectionSnapshot) -> None:
         connected = self.camera.connected
@@ -189,6 +243,10 @@ class MonitoringSystem:
             }
             if snap.ai_status in messages:
                 await self._emit(*messages[snap.ai_status])
+            if snap.ai_status == "ONLINE" and self._ai_status in (None, "STARTING"):
+                await self.telemetry.broadcast(
+                    self.telemetry.make_alert("MONITORING", "Monitoring started · normal driving state", "INFO")
+                )
             self._ai_status = snap.ai_status
 
     def _vehicle_note(self, alert_type: str) -> str:
@@ -234,18 +292,36 @@ class MonitoringSystem:
             # --- driver / detection ---
             "driver_status": self._driver_status(snap, ai_active),
             "head_direction": snap.head_direction,
+            "head_yaw": snap.head_yaw,
+            "head_pitch": snap.head_pitch,
+            "head_roll": snap.head_roll,
+            "gaze": {
+                "direction": snap.gaze_direction,
+                "yaw": snap.gaze_yaw,
+                "pitch": snap.gaze_pitch,
+            },
             "ear": snap.ear,
             "ear_threshold": self.settings.ear_threshold,
             "eyes_state": snap.eyes_state,
             "face_detected": snap.face_detected,
             "phone_visible": snap.phone_visible,
             "phone_confidence": snap.phone_confidence,
+            "phone_score": snap.phone_score,
             "phone_detected": snap.phone_detected,
             "drowsiness_detected": snap.drowsiness_detected,
             "looking_away": snap.looking_away,
             "distraction_detected": ai_active and snap.distraction_detected,
             "active_conditions": snap.active_conditions if ai_active else [],
             "condition_progress": snap.progress,
+            "condition_elapsed": snap.elapsed,
+            # --- derived driver state (attention score, severity, EAR trend) ---
+            **(self._state.to_dict() if self._state else {
+                "attention": {"score": None, "label": "NO DATA", "message": "AI not active"},
+                "severity": {"score": None, "label": "Unknown"},
+                "ear_status": "No data",
+                "drowsiness_state": "UNKNOWN",
+                "ear_baseline": None,
+            }),
             # --- alert ---
             "alert_type": current.type if current else None,
             "alert_message": current.message if current else None,
@@ -275,6 +351,7 @@ class MonitoringSystem:
                 "speaking": self.voice.speaking,
                 "error": self.voice.error,
             },
+            "logging": self.data_logger.status(),
             # --- overlay (normalised 0..1 coordinates) ---
             "overlay": {
                 "frame_width": snap.frame_width,
@@ -282,6 +359,7 @@ class MonitoringSystem:
                 "eye_points": snap.eye_points,
                 "pose_points": snap.pose_points,
                 "face_box": snap.face_box,
+                "iris_points": snap.iris_points,
                 "phone_boxes": snap.phone_boxes,
             },
         }

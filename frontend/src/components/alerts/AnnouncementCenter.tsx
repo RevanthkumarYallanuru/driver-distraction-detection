@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle, CarFront, CheckCircle2, OctagonAlert, Volume2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useDashboard } from '../../hooks/useDashboard'
-import { levelTone, toneHex, toneText } from '../../lib/tone'
+import { levelTone, toneText, toneVar } from '../../lib/tone'
 import type { Announcement } from '../../types/telemetry'
 
 const VISIBLE_MS: Record<string, number> = {
@@ -34,7 +34,7 @@ export function AnnouncementCenter() {
   }, [latest])
 
   const tone = shown ? levelTone(shown.level) : 'muted'
-  const color = toneHex[tone]
+  const color = toneVar[tone]
   const critical = shown?.level === 'CRITICAL'
 
   return (
@@ -49,7 +49,7 @@ export function AnnouncementCenter() {
             exit={{ opacity: 0, y: 10, transition: { duration: 0.18 } }}
             transition={{ type: 'spring', stiffness: 380, damping: 30 }}
             className="pointer-events-auto relative w-full max-w-[440px] overflow-hidden rounded-2xl border bg-panel/95 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.9)] backdrop-blur-md"
-            style={{ borderColor: `${color}55` }}
+            style={{ borderColor: `color-mix(in srgb, ${color} 35%, transparent)` }}
           >
             {/* subtle pulse ring */}
             <motion.div

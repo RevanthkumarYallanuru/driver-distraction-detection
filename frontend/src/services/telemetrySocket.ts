@@ -36,11 +36,14 @@ export function startTelemetrySocket(): () => void {
       case 'event':
         telemetryStore.addEvent(message)
         break
+      case 'alert':
+        telemetryStore.addAlert(message)
+        break
       case 'announcement':
         telemetryStore.setAnnouncement(message.announcement)
         break
       case 'hello':
-        telemetryStore.setEvents(message.events)
+        telemetryStore.setHistory(message.events, message.alerts ?? [])
         break
     }
   }

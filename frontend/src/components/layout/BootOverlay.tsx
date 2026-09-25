@@ -11,7 +11,7 @@ const MIN_VISIBLE_MS = 1600
 function Row({ label, value, tone }: { label: string; value: string; tone: Tone }) {
   return (
     <div className="flex items-center justify-between border-b border-edge py-2.5 last:border-0">
-      <span className="label">{label}</span>
+      <span className="text-[12px] text-ink-2">{label}</span>
       <span className={`flex items-center gap-2 text-[12px] font-semibold tracking-[0.16em] ${toneText[tone]}`}>
         <StatusDot tone={tone} pulse={tone === 'info'} size={6} />
         {value}
@@ -57,9 +57,9 @@ export function BootOverlay() {
             <div className="mx-auto mb-5 grid size-14 place-items-center rounded-2xl border border-info/25 bg-info/10 text-info">
               <ScanEye size={26} strokeWidth={1.5} />
             </div>
-            <p className="label mb-1">{ready ? 'System ready' : 'System starting'}</p>
-            <h1 className="mb-6 text-[15px] font-semibold tracking-[0.2em]">AI DRIVER MONITORING SYSTEM</h1>
-            <div className="panel px-4 py-1 text-left">
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-3">{ready ? 'System ready' : 'System starting'}</p>
+            <h1 className="mb-6 font-display text-[17px] font-semibold">DriveSafe AI · Cockpit Analytics</h1>
+            <div className="card px-4 py-1 text-left">
               <Row label="Backend" value={link[0]} tone={link[1]} />
               <Row label="Camera" value={cam[0]} tone={cam[1]} />
               <Row label="AI" value={aiRow[0]} tone={aiRow[1]} />

@@ -6,12 +6,16 @@ The model is loaded once.
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 log = logging.getLogger(__name__)
 
 # COCO class ID 67 = cell phone
 PHONE_CLASS_ID = 67
+
+# Candidates below the detection threshold are still scored so the
+# dashboard can show "Not detected, confidence 0.08".
+SCORE_FLOOR = 0.05
 
 
 @dataclass
@@ -45,22 +49,31 @@ class PhoneDetector:
         self._min_confidence = min_confidence
 
     def detect(self, frame_bgr) -> List[PhoneBox]:
+        return self.detect_with_score(frame_bgr)[0]
+
+    def detect_with_score(self, frame_bgr) -> Tuple[List[PhoneBox], float]:
+        """Phones at/above the V1 threshold, plus the best phone score seen."""
         height, width = frame_bgr.shape[:2]
 
         results = self._model(
             frame_bgr,
             verbose=False,
             classes=[PHONE_CLASS_ID],
+            conf=SCORE_FLOOR,
         )
 
         boxes: List[PhoneBox] = []
+        best = 0.0
 
         for result in results:
             for box in result.boxes:
                 class_id = int(box.cls[0])
                 confidence = float(box.conf[0])
 
-                if class_id != PHONE_CLASS_ID or confidence < self._min_confidence:
+                if class_id != PHONE_CLASS_ID:
+                    continue
+                best = max(best, confidence)
+                if confidence < self._min_confidence:
                     continue
 
                 x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
@@ -74,4 +87,4 @@ class PhoneDetector:
                     )
                 )
 
-        return boxes
+        return boxes, best

@@ -70,3 +70,74 @@ def head_direction(
     if ratio > left_threshold:
         return "LEFT"
     return "CENTER"
+
+
+# ---------------------------------------------------------------------
+# V2 additions: head angles and eye gaze
+# ---------------------------------------------------------------------
+
+# Iris centres (Face Landmarker 478-point model)
+IRIS_A = 468   # iris inside the LEFT_EYE landmark set (33 ... 133)
+IRIS_B = 473   # iris inside the RIGHT_EYE landmark set (362 ... 263)
+EYE_A_CORNERS = (33, 133)
+EYE_B_CORNERS = (362, 263)
+EYE_A_LIDS = (159, 145)
+EYE_B_LIDS = (386, 374)
+
+
+def head_angles(rotation) -> Tuple[float, float, float]:
+    """
+    Yaw / pitch / roll in degrees from the Face Landmarker's facial
+    transformation matrix (3x3 rotation, camera space with y up).
+
+    Sign convention (matches V1's LEFT/RIGHT labels, driver's view):
+      yaw   > 0  -> driver turned to their LEFT   (V1 "LEFT")
+      pitch > 0  -> driver looking DOWN
+      roll  > 0  -> head tilted clockwise in the image
+    """
+    fx, fy, fz = rotation[0][2], rotation[1][2], rotation[2][2]
+    yaw = math.degrees(math.atan2(fx, fz))
+    pitch = math.degrees(math.atan2(-fy, math.hypot(fx, fz)))
+    roll = math.degrees(math.atan2(-rotation[0][1], rotation[1][1]))
+    return yaw, pitch, roll
+
+
+def _axis_offset(value: float, a: float, b: float) -> float:
+    """Position of value between a and b mapped to -1..1 (0 = centred)."""
+    span = b - a
+    if abs(span) < 1e-6:
+        return 0.0
+    t = (value - a) / span
+    return max(-1.0, min(1.0, (t - 0.5) * 2.0))
+
+
+def iris_offset(landmarks) -> Tuple[float, float]:
+    """
+    Average iris position inside both eyes, each axis in -1..1.
+    x > 0 -> iris toward image-right (driver's LEFT); y > 0 -> looking down.
+    """
+    xs, ys = [], []
+    for iris, (c1, c2), (top, bottom) in (
+        (IRIS_A, EYE_A_CORNERS, EYE_A_LIDS),
+        (IRIS_B, EYE_B_CORNERS, EYE_B_LIDS),
+    ):
+        left_x = min(landmarks[c1].x, landmarks[c2].x)
+        right_x = max(landmarks[c1].x, landmarks[c2].x)
+        xs.append(_axis_offset(landmarks[iris].x, left_x, right_x))
+        ys.append(_axis_offset(landmarks[iris].y, landmarks[top].y, landmarks[bottom].y))
+    return sum(xs) / len(xs), sum(ys) / len(ys)
+
+
+def gaze_angles(yaw: float, pitch: float, iris_x: float, iris_y: float,
+                eye_range_h: float = 30.0, eye_range_v: float = 20.0) -> Tuple[float, float]:
+    """Approximate gaze = head orientation + eye rotation inside the head."""
+    return yaw + iris_x * eye_range_h, pitch + iris_y * eye_range_v
+
+
+def gaze_direction(gaze_yaw: float, gaze_pitch: float,
+                   h_threshold: float = 15.0, v_threshold: float = 12.0) -> str:
+    horizontal = "LEFT" if gaze_yaw > h_threshold else "RIGHT" if gaze_yaw < -h_threshold else ""
+    vertical = "DOWN" if gaze_pitch > v_threshold else "UP" if gaze_pitch < -v_threshold else ""
+    if horizontal and vertical:
+        return f"{vertical}-{horizontal}"
+    return horizontal or vertical or "CENTER"

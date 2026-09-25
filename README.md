@@ -28,18 +28,50 @@ The other files in `src/` are the standalone experiments V1 was built from.
 
 ### Version 2: web dashboard (`backend/` + `frontend/`)
 
-V2 turns the V1 logic into services behind a FastAPI backend and adds a live React
-dashboard:
+V2 turns the V1 logic into services behind a FastAPI backend and adds the live
+**DriveSafe AI · Automotive Cockpit Analytics** dashboard:
 
-- **Left:** the live driver camera with a light detection overlay (face brackets,
-  eye landmarks, phone bounding boxes, eye/head/phone readout).
-- **Right:** an animated **simulated vehicle** with speed, target speed and status
-  (MOVING / SLOWING / SLOWED / ACCELERATING / HORNED), plus the reason for any
-  speed change.
-- **AI status:** eyes, head, phone and driver state, each with a bar showing how far
-  the condition is toward its sustained-duration confirmation.
-- **Telemetry, speed trend and event log** updated in real time over a WebSocket.
+- **Top bar:** Live Monitoring indicator, dark/light theme toggle, notification bell
+  (unread alerts badge; opens the vehicle & system event log), profile chip.
+- **Live Camera Feed:** the driver video with face box, eye and iris landmarks, phone
+  boxes, and a readout of EAR, head yaw, pitch, phone and attention state.
+- **Driver Attention Score:** a 0–100 ring gauge (ATTENTIVE / REDUCED ATTENTION /
+  DISTRACTED / CRITICAL).
+- **Vehicle Speed:** a 0–120 km/h speedometer over an animated first-person night road
+  that moves at the **simulated** speed, with vehicle status, target speed, the reason
+  for any slowdown, brake glow and horn.
+- **Metric cards:** Eye Aspect Ratio (with sparkline), Head Position (yaw/pitch in
+  degrees), Phone Detection (with confidence), Drowsiness (with EAR trend), Gaze
+  Direction (gaze map) and Distraction Severity (0–100 gauge).
+- **Recent Alerts:** each alert with the measurement that caused it, e.g.
+  "Drowsiness detected (EAR: 0.18)", "Phone detected (Confidence: 0.72)",
+  "Looking right for 2 seconds".
+- **System Status:** AI model, camera, real-time processing, data logging, voice.
 - **JARVIS-inspired announcements:** every alert is shown on screen *and* spoken.
+
+### Derived metrics (`backend/services/driver_state.py`)
+
+These are display metrics computed from the same signals as the alerts; they never
+trigger alerts themselves.
+
+- **Head yaw / pitch** come from MediaPipe's facial transformation matrix (yaw > 0 is
+  the driver's left, matching V1's LEFT label; pitch > 0 is looking down).
+- **Gaze** = head angles + iris position inside the eye (iris landmarks 468 / 473).
+- **Attention score** = 100 minus transparent penalties: eyes nearly or fully closed,
+  head turned beyond 10° or tilted down beyond 15°, phone confidence, and progress
+  toward a confirmed condition. A confirmed condition caps the score. The score is
+  smoothed so it falls fast and recovers gently.
+- **Severity** = the highest of: the confirmed condition's severity (critical 95,
+  drowsiness 85, phone 70, looking away 60), a building condition, or inattention.
+- **EAR trend** compares short-term EAR to the driver's own open-eye baseline
+  ("EAR stable" / "EAR dropping" / "Eyes closed").
+- **Phone confidence** reports YOLO's best phone score even below the 0.50 detection
+  threshold, so "Not Detected · 0.08" is visible.
+
+### Session data logging (`backend/services/data_logger.py`)
+
+Every run writes `logs/session_YYYYmmdd_HHMMSS.jsonl`: telemetry once per second,
+plus every alert and event. Set `DATA_LOGGING=0` to turn it off.
 
 ---
 
@@ -93,8 +125,8 @@ target). It never jumps.
                   │ MJPEG  /api/stream                    WebSocket /ws/telemetry
                   ▼                                                          ▼
             ┌──────────────────── frontend (React, TypeScript) ──────────────────┐
-            │ CameraPanel + DetectionOverlay │ VehiclePanel + VehicleScene        │
-            │ AIStatusStrip · TelemetryPanel · SpeedTrend · EventLog · Announcements│
+            │ CameraFeed · AttentionScore · VehicleSpeed (Speedometer + RoadScene) │
+            │ 6 MetricCards · RecentAlerts · SystemStatus · Announcements          │
             └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -138,6 +170,8 @@ target). It never jumps.
 | `GET /api/stream` | MJPEG camera stream |
 | `WS /ws/telemetry` | real-time telemetry, announcements, events |
 | `GET /api/health` | camera / AI / voice status |
+| `GET /api/alerts` | recent alerts with their measurements |
+| `GET /api/events` | recent vehicle / system events |
 | `POST /api/vehicle/horn` | sound the simulated horn |
 | `POST /api/debug/simulate` | *debug only:* inject a confirmed condition (see Testing) |
 
@@ -147,8 +181,8 @@ target). It never jumps.
 
 **Backend:** Python, FastAPI, Uvicorn, OpenCV, MediaPipe Tasks (Face Landmarker),
 Ultralytics YOLO11n, PyTorch, pyttsx3.
-**Frontend:** React 19, TypeScript, Vite, Tailwind CSS 4, Framer Motion, Lucide icons,
-Recharts (speed-trend chart only).
+**Frontend:** React 19, TypeScript, Vite, Tailwind CSS 4, Framer Motion, Lucide icons, HTML canvas (animated road)
+and hand-built SVG gauges.
 
 ## Folder structure
 
@@ -167,6 +201,8 @@ driver-distraction-detection/
 │   │   │   ├── phone_detector.py  YOLO phone detection
 │   │   │   └── temporal.py        sustained-duration validation
 │   │   ├── alert_manager.py       priority, cooldowns, announcements
+│   │   ├── driver_state.py        attention score, severity, EAR trend
+│   │   ├── data_logger.py         session JSONL recorder
 │   │   ├── voice_service.py       single voice worker thread
 │   │   ├── vehicle_simulator.py   smooth speed + vehicle state machine
 │   │   ├── telemetry_service.py   WebSocket fan-out, event history
@@ -175,7 +211,7 @@ driver-distraction-detection/
 │   └── requirements.txt
 ├── frontend/
 │   └── src/
-│       ├── components/            camera/, vehicle/, telemetry/, alerts/, layout/, ui/
+│       ├── components/            camera/, cards/, vehicle/, metrics/, alerts/, system/, layout/, ui/
 │       ├── hooks/                 store selectors, animated speed
 │       ├── services/              WebSocket client + telemetry store
 │       ├── pages/Dashboard.tsx
@@ -288,6 +324,7 @@ All V1 thresholds are kept and can be overridden with environment variables. Exa
 | `YOLO_EVERY_N_FRAMES` | 1 | run YOLO less often on slow CPUs |
 | `VOICE_ENABLED` | 1 | turn voice off with `0` |
 | `CAMERA_INDEX` | 0 | webcam index |
+| `DATA_LOGGING` | 1 | write `logs/session_*.jsonl` |
 
 ---
 

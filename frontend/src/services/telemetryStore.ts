@@ -1,22 +1,19 @@
-import type { Announcement, ConnectionState, SystemEvent, Telemetry } from '../types/telemetry'
-
-export interface SpeedSample {
-  t: number
-  speed: number
-  target: number
-}
+import type { AlertLogEntry, Announcement, ConnectionState, SystemEvent, Telemetry } from '../types/telemetry'
 
 export interface DashboardState {
   connection: ConnectionState
   telemetry: Telemetry | null
   events: SystemEvent[]
+  alerts: AlertLogEntry[]
+  unreadAlerts: number
   announcement: Announcement | null
-  speedHistory: SpeedSample[]
+  /** Recent EAR samples (NaN = no face) for the sparkline. */
+  earHistory: number[]
 }
 
-const MAX_EVENTS = 40
-const HISTORY_SECONDS = 60
-const HISTORY_INTERVAL_MS = 500
+const MAX_EVENTS = 50
+const MAX_ALERTS = 50
+const EAR_SAMPLES = 90 // ~9 s at 10 Hz
 
 /**
  * Tiny external store. Components subscribe through useDashboard(selector)
@@ -28,11 +25,12 @@ class TelemetryStore {
     connection: 'connecting',
     telemetry: null,
     events: [],
+    alerts: [],
+    unreadAlerts: 0,
     announcement: null,
-    speedHistory: [],
+    earHistory: [],
   }
   private listeners = new Set<() => void>()
-  private lastSampleAt = 0
 
   getState = () => this.state
 
@@ -53,26 +51,35 @@ class TelemetryStore {
   }
 
   setTelemetry(telemetry: Telemetry) {
-    const patch: Partial<DashboardState> = { telemetry }
-    const now = Date.now()
-    if (now - this.lastSampleAt >= HISTORY_INTERVAL_MS) {
-      this.lastSampleAt = now
-      const cutoff = now - HISTORY_SECONDS * 1000
-      patch.speedHistory = [
-        ...this.state.speedHistory.filter((s) => s.t >= cutoff),
-        { t: now, speed: telemetry.speed, target: telemetry.target_speed },
-      ]
-    }
-    this.set(patch)
+    const sample = telemetry.ear ?? Number.NaN
+    this.set({
+      telemetry,
+      earHistory: [...this.state.earHistory, sample].slice(-EAR_SAMPLES),
+    })
   }
 
-  setEvents(events: SystemEvent[]) {
-    this.set({ events: events.slice(-MAX_EVENTS).reverse() })
+  setHistory(events: SystemEvent[], alerts: AlertLogEntry[]) {
+    this.set({
+      events: events.slice(-MAX_EVENTS).reverse(),
+      alerts: alerts.slice(-MAX_ALERTS).reverse(),
+    })
   }
 
   addEvent(event: SystemEvent) {
     if (this.state.events.some((e) => e.id === event.id)) return
     this.set({ events: [event, ...this.state.events].slice(0, MAX_EVENTS) })
+  }
+
+  addAlert(alert: AlertLogEntry) {
+    if (this.state.alerts.some((a) => a.id === alert.id)) return
+    this.set({
+      alerts: [alert, ...this.state.alerts].slice(0, MAX_ALERTS),
+      unreadAlerts: alert.level === 'INFO' ? this.state.unreadAlerts : this.state.unreadAlerts + 1,
+    })
+  }
+
+  markAlertsRead() {
+    if (this.state.unreadAlerts) this.set({ unreadAlerts: 0 })
   }
 
   setAnnouncement(announcement: Announcement | null) {

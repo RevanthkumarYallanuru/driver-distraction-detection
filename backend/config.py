@@ -116,6 +116,14 @@ class Settings:
     horn_duration: float = _env_float("HORN_DURATION", 1.6)
 
     # ---------------------------------------------------------------
+    # Session data logging (logs/session_*.jsonl)
+    # ---------------------------------------------------------------
+    data_logging: bool = _env_bool("DATA_LOGGING", True)
+    logs_dir: Path = field(
+        default_factory=lambda: Path(os.environ.get("LOGS_DIR", PROJECT_ROOT / "logs"))
+    )
+
+    # ---------------------------------------------------------------
     # Server
     # ---------------------------------------------------------------
     telemetry_hz: float = _env_float("TELEMETRY_HZ", 10.0)

@@ -19,3 +19,6 @@ Thumbs.db
 # Kaggle training automation
 training/.kaggle_push/
 training/.kaggle_last_run.json
+
+# Session data logs
+logs/

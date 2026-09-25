@@ -75,6 +75,11 @@ async def events(request: Request):
     return get_system(request).telemetry.events
 
 
+@router.get("/api/alerts")
+async def alerts(request: Request):
+    return get_system(request).telemetry.alerts
+
+
 # ----------------------------------------------------------------------
 # Camera stream (MJPEG) — frames come from the single CameraService
 # ----------------------------------------------------------------------

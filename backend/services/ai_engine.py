@@ -35,9 +35,17 @@ class DetectionSnapshot:
     eyes_state: str = "UNKNOWN"          # OPEN | CLOSED | UNKNOWN
     head_direction: str = "UNKNOWN"      # CENTER | LEFT | RIGHT | UNKNOWN
     head_ratio: Optional[float] = None
+    # Degrees. yaw > 0 = driver's left, pitch > 0 = looking down.
+    head_yaw: Optional[float] = None
+    head_pitch: Optional[float] = None
+    head_roll: Optional[float] = None
+    gaze_yaw: Optional[float] = None
+    gaze_pitch: Optional[float] = None
+    gaze_direction: str = "UNKNOWN"
 
     phone_visible: bool = False          # raw, this frame
     phone_confidence: Optional[float] = None
+    phone_score: float = 0.0             # best phone score, even below threshold
     phone_boxes: List[dict] = field(default_factory=list)
 
     # Temporally validated conditions
@@ -45,8 +53,10 @@ class DetectionSnapshot:
     looking_away: bool = False
     phone_detected: bool = False
     progress: Dict[str, float] = field(default_factory=dict)
+    elapsed: Dict[str, float] = field(default_factory=dict)   # seconds present
 
     eye_points: List[Tuple[float, float]] = field(default_factory=list)
+    iris_points: List[Tuple[float, float]] = field(default_factory=list)
     pose_points: List[Tuple[float, float]] = field(default_factory=list)
     face_box: Optional[Tuple[float, float, float, float]] = None
 
@@ -187,6 +197,7 @@ class AIEngine:
         fps_count = 0
         processing_fps = 0.0
         last_boxes: list = []
+        last_score = 0.0
 
         while not self._stop.is_set():
             frame_id_new, frame = self.camera.wait_for_frame(frame_id, timeout=0.5)
@@ -214,8 +225,9 @@ class AIEngine:
             started = time.monotonic()
 
             try:
-                snapshot = self._process(frame, processed, last_boxes)
+                snapshot = self._process(frame, processed, last_boxes, last_score)
                 last_boxes = snapshot.phone_boxes
+                last_score = snapshot.phone_score
             except Exception as error:  # never let one bad frame kill the loop
                 log.exception("Frame processing failed")
                 status, messages = self._base_status()
@@ -248,7 +260,7 @@ class AIEngine:
             "looking_away": "LOOKING_AWAY" in active,
         }
 
-    def _process(self, frame, index: int, last_boxes: list) -> DetectionSnapshot:
+    def _process(self, frame, index: int, last_boxes: list, last_score: float = 0.0) -> DetectionSnapshot:
         now = time.monotonic()
         height, width = frame.shape[:2]
         s = self.settings
@@ -274,6 +286,15 @@ class AIEngine:
                 snap.eyes_state = "CLOSED" if eyes_closed else "OPEN"
                 snap.head_direction = face.head_direction
                 snap.head_ratio = round(face.head_ratio, 3)
+                if face.yaw is not None:
+                    snap.head_yaw = round(face.yaw, 1)
+                    snap.head_pitch = round(face.pitch, 1)
+                    snap.head_roll = round(face.roll, 1)
+                if face.gaze_yaw is not None:
+                    snap.gaze_yaw = round(face.gaze_yaw, 1)
+                    snap.gaze_pitch = round(face.gaze_pitch, 1)
+                    snap.gaze_direction = face.gaze_direction
+                snap.iris_points = [(round(x, 4), round(y, 4)) for x, y in face.iris_points]
                 snap.eye_points = [(round(x, 4), round(y, 4)) for x, y in face.eye_points]
                 snap.pose_points = [(round(x, 4), round(y, 4)) for x, y in face.pose_points]
                 snap.face_box = tuple(round(v, 4) for v in face.face_box)
@@ -289,10 +310,12 @@ class AIEngine:
         if self._phone is not None:
             every = max(1, s.yolo_every_n_frames)
             if index % every == 0:
-                boxes = [b.to_dict() for b in self._phone.detect(frame)]
+                found, score = self._phone.detect_with_score(frame)
+                boxes = [b.to_dict() for b in found]
             else:
-                boxes = last_boxes
+                boxes, score = last_boxes, last_score
             snap.phone_boxes = boxes
+            snap.phone_score = round(score, 3)
             snap.phone_visible = bool(boxes)
             snap.phone_confidence = max((b["confidence"] for b in boxes), default=None)
             self._phone_timer.update(snap.phone_visible, now)
@@ -304,6 +327,11 @@ class AIEngine:
             "DROWSINESS": round(self._eyes.progress(now), 2),
             "LOOKING_AWAY": round(self._away.progress(now), 2),
             "PHONE": round(self._phone_timer.progress(now), 2),
+        }
+        snap.elapsed = {
+            "DROWSINESS": round(self._eyes.elapsed(now), 1),
+            "LOOKING_AWAY": round(self._away.elapsed(now), 1),
+            "PHONE": round(self._phone_timer.elapsed(now), 1),
         }
 
         # Debug-only simulated conditions are OR-ed on top of real ones.

@@ -27,6 +27,14 @@ class FaceAnalysis:
     right_ear: Optional[float] = None
     head_ratio: Optional[float] = None
     head_direction: str = "UNKNOWN"
+    # V2: angles in degrees (yaw > 0 = driver's left, pitch > 0 = down)
+    yaw: Optional[float] = None
+    pitch: Optional[float] = None
+    roll: Optional[float] = None
+    gaze_yaw: Optional[float] = None
+    gaze_pitch: Optional[float] = None
+    gaze_direction: str = "UNKNOWN"
+    iris_points: List[Tuple[float, float]] = field(default_factory=list)
     # Normalised (0..1) points for the browser overlay
     eye_points: List[Tuple[float, float]] = field(default_factory=list)
     pose_points: List[Tuple[float, float]] = field(default_factory=list)
@@ -46,6 +54,7 @@ class FaceAnalyzer:
             min_face_detection_confidence=0.5,
             min_face_presence_confidence=0.5,
             min_tracking_confidence=0.5,
+            output_facial_transformation_matrixes=True,
         )
 
         self._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
@@ -85,6 +94,19 @@ class FaceAnalyzer:
         ratio = geometry.head_ratio(nose, left, right)
         direction = geometry.head_direction(ratio, self._ratio_right, self._ratio_left)
 
+        yaw = pitch = roll = gaze_yaw = gaze_pitch = None
+        gaze = "UNKNOWN"
+        iris_points: List[Tuple[float, float]] = []
+        if result.facial_transformation_matrixes:
+            yaw, pitch, roll = geometry.head_angles(result.facial_transformation_matrixes[0])
+            if len(face) > geometry.IRIS_B:
+                iris_x, iris_y = geometry.iris_offset(face)
+                gaze_yaw, gaze_pitch = geometry.gaze_angles(yaw, pitch, iris_x, iris_y)
+                gaze = geometry.gaze_direction(gaze_yaw, gaze_pitch)
+                iris_points = [
+                    (face[i].x, face[i].y) for i in (geometry.IRIS_A, geometry.IRIS_B)
+                ]
+
         xs = [lm.x for lm in face]
         ys = [lm.y for lm in face]
 
@@ -95,6 +117,13 @@ class FaceAnalyzer:
             right_ear=right_ear,
             head_ratio=ratio,
             head_direction=direction,
+            yaw=yaw,
+            pitch=pitch,
+            roll=roll,
+            gaze_yaw=gaze_yaw,
+            gaze_pitch=gaze_pitch,
+            gaze_direction=gaze,
+            iris_points=iris_points,
             eye_points=[
                 (face[i].x, face[i].y)
                 for i in geometry.LEFT_EYE + geometry.RIGHT_EYE
