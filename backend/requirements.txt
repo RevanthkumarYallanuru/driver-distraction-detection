@@ -1,0 +1,16 @@
+# V1 AI dependencies (unchanged)
+opencv-python
+mediapipe
+numpy
+ultralytics
+pyttsx3
+torch
+torchvision
+
+# V2 web backend
+fastapi
+uvicorn[standard]
+
+# Tests
+pytest
+httpx

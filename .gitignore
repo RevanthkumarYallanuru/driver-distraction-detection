@@ -1,0 +1,21 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Misc
+*.log
+.env
+.DS_Store
+Thumbs.db
+
+# Kaggle training automation
+training/.kaggle_push/
+training/.kaggle_last_run.json
